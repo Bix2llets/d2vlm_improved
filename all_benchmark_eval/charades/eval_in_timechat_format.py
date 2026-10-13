@@ -56,16 +56,21 @@ if __name__ == "__main__":
         
     submission = read_json(args.pred_file)
     pred_timestamps = {}
+    pred_timestamps_k = {}
     num = 0
     for qid, jterm in submission.items():
         if 'timestamp' not in jterm:
             pred_timestamps[int(qid)] = [0, 0]
+            pred_timestamps_k[int(qid)] = [[0, 0]]
             continue
         # if submission[qid]['vid'] != answer[int(qid)]['image_id'] or submission[qid]['query'].strip() != answer[int(qid)]['caption'].strip():
         #     print(f"{submission[qid]['vid']}\n{answer[int(qid)]['image_id']}\n{submission[qid]['query']}\n{answer[int(qid)]['caption']}")
         num += 1
         pred_timestamps[int(qid)] = jterm["timestamp"]
-    
+        pred_timestamps_k[int(qid)] = jterm.get("timestamps", [jterm["timestamp"]])
+
+    k_name = max((len(v) for v in pred_timestamps_k.values()), default=1)
+
     if args.sample:
         new = {}
         for qid in pred_timestamps.keys():
@@ -75,6 +80,7 @@ if __name__ == "__main__":
     print(f"# pred video timestamps {len(pred_timestamps)}; # gt video timestamps {len(gt_timestamps)}")
     # assert len(gt_timestamps) == len(pred_timestamps)
     Result = {0: 0, 0.3:0, 0.5:0, 0.7:0, 'miou': 0}
+    Result_k = {0: 0, 0.3:0, 0.5:0, 0.7:0, 'miou': 0}
     for key in gt_timestamps.keys():
         if key not in pred_timestamps or len(pred_timestamps[key]) < 1:
             continue
@@ -83,13 +89,25 @@ if __name__ == "__main__":
             if(temp >= c_iou):
                 Result[c_iou] = Result[c_iou] + 1
         Result['miou'] += temp
+
+        candidates = pred_timestamps_k.get(key, [pred_timestamps[key]])
+        temp_k = max(iou(gt_timestamps[key], p) for p in candidates)
+        for c_iou in [0.0, 0.3, 0.5, 0.7]:
+            if(temp_k >= c_iou):
+                Result_k[c_iou] = Result_k[c_iou] + 1
+        Result_k['miou'] += temp_k
     print(num, sum(Result.values()), Result)
     print("IOU 0.3: {0}\nIOU 0.5: {1}\nIOU 0.7: {2}\n mIOU: {3}".format(Result[0.3]*100/num, Result[0.5]*100/num, Result[0.7]*100/num, Result['miou']/num))
+    print("Recall@{K} 0.3: {0}\nRecall@{K} 0.5: {1}\nRecall@{K} 0.7: {2}\n mIOU@{K}: {3}".format(Result_k[0.3]*100/num, Result_k[0.5]*100/num, Result_k[0.7]*100/num, Result_k['miou']/num, K=k_name))
     good_cases = []
     good_cases.append(f'IOU 0.3: {Result[0.3]*100/num}')
     good_cases.append(f'IOU 0.5: {Result[0.5]*100/num}')
     good_cases.append(f'IOU 0.7: {Result[0.7]*100/num}')
     good_cases.append(f'mIOU: {Result["miou"]/num}')
+    good_cases.append(f'Recall@{k_name} 0.3: {Result_k[0.3]*100/num}')
+    good_cases.append(f'Recall@{k_name} 0.5: {Result_k[0.5]*100/num}')
+    good_cases.append(f'Recall@{k_name} 0.7: {Result_k[0.7]*100/num}')
+    good_cases.append(f'mIOU@{k_name}: {Result_k["miou"]/num}')
     output_path = '/'.join(args.pred_file.split("/")[:-1])
     output_file = "score_" + args.pred_file.split("/")[-1]
     output_file = os.path.join(output_path, output_file)

@@ -557,29 +557,40 @@ def tvg_eval(samples, delimiter):
     for sample in samples:
         gt = sample['tgt']
 
-        prediction = tvg_format(sample['a'], delimiter)
-        if prediction is None:
+        candidates = sample.get('a_candidates') or [sample['a']]
+
+        preds, evi = [], None
+        for cand in candidates:
+            prediction = tvg_format(cand, delimiter)
+            if prediction is None:
+                continue
+            cand_pred, cand_evi = prediction[0], prediction[-1]
+            if cand_pred:
+                preds.append(cand_pred[0])
+            if evi is None and cand_evi:
+                evi = cand_evi[0]
+
+        if not preds and evi is not None:
+            preds = [evi]
+
+        if len(preds) == 0:
             cnt += 1
-            samples_timechat[sample['index']] = []
+            samples_timechat[sample['idx']] = []
             continue
 
-        pred, evi = prediction[0], prediction[-1]
-        if not pred:
-            if not evi:
-                cnt += 1
-                samples_timechat[sample['index']] = []
-                continue
-            else:
-                pred = evi
+        pred = preds[0]
+        if evi is None:
+            evi = pred
         samples_timechat[f'{sample['idx']}'] = {}
-        samples_timechat[f'{sample['idx']}']['timestamp'] = pred[0]
+        samples_timechat[f'{sample['idx']}']['timestamp'] = pred
+        samples_timechat[f'{sample['idx']}']['timestamps'] = preds
         samples_timechat[f'{sample['idx']}']['vid'] = sample['video'].split('/')[-1]
         samples_timechat[f'{sample['idx']}']['query'] = sample['q'].split("'")[1] +'. '
         gt = torch.Tensor([gt])
-        pred = torch.Tensor(pred)
-        evi = torch.Tensor(evi)
-        iou = temporal_iou(gt, pred).max().item()
-        iou_evi = temporal_iou(gt, evi).max().item()
+        pred_t = torch.Tensor(pred)
+        evi_t = torch.Tensor(evi)
+        iou = temporal_iou(gt, pred_t).max().item()
+        iou_evi = temporal_iou(gt, evi_t).max().item()
         sum_iou += iou
         sum_iou_evi += iou_evi
 

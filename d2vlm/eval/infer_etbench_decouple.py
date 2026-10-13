@@ -40,6 +40,8 @@ def parse_args():
     parser.add_argument('--index', type=int, default=0)
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--arch_module', type=str, default='d2vlm_arch')    # new update: rename the previous etchat_arch to d2vlm_arch for distinguishing
+    parser.add_argument('--num_candidates', type=int, default=1)            # number of sampled candidates per query (Recall@K)
+    parser.add_argument('--temperature', type=float, default=0.2)           # sampling temperature
     args = parser.parse_args()
     return args
 
@@ -93,30 +95,37 @@ if __name__ == '__main__':
         stop_str = conv.seps[-1]
         stopping_criteria = [KeywordsStoppingCriteria(tokenizer, stop_str)]
 
+        responses = []
         with torch.inference_mode():
-            out = model.generate(
-                input_ids,
-                image=[video],
-                do_sample=True,
-                temperature=0.2,
-                max_new_tokens=2048,
-                cache_implementation=None,
-                logits_processor=logits_processor,
-                stopping_criteria=stopping_criteria,
-                query=[[query]],
-                src=[src],
-                tag=[tag])
+            for _ in range(args.num_candidates):
+                out = model.generate(
+                    input_ids,
+                    image=[video],
+                    do_sample=True,
+                    temperature=args.temperature,
+                    max_new_tokens=2048,
+                    cache_implementation=None,
+                    logits_processor=logits_processor,
+                    stopping_criteria=stopping_criteria,
+                    query=[[query]],
+                    src=[src],
+                    tag=[tag])
 
-        tokens = out[0, input_ids.size(1):]
-        response = detokenize(tokens, model, tokenizer)
+                tokens = out[0, input_ids.size(1):]
+                response = detokenize(tokens, model, tokenizer)
+
+                if response.endswith(stop_str):
+                    response = response[:-len(stop_str)].strip()
+
+                responses.append(response)
+
+        response = responses[0]
 
         end_time = time.time()  
         inference_time = end_time - start_time  
 
-        if response.endswith(stop_str):
-            response = response[:-len(stop_str)].strip()
-
         anno[i]['a'] = response
+        anno[i]['a_candidates'] = responses
         anno[i]['token length'] = input_ids.size(1)
         all_samples.append(anno[i])
         # anno[i]['inference_time'] = inference_time
