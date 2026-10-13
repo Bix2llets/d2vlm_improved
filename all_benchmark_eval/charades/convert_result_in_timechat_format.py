@@ -555,38 +555,41 @@ def tvg_eval(samples, delimiter):
     samples_timechat = {}
 
     for sample in samples:
-        gt = sample['tgt']
-
         candidates = sample.get('a_candidates') or [sample['a']]
 
-        preds, evi = [], None
+        preds, candidate_timestamps, evi = [], [], None
         for cand in candidates:
             prediction = tvg_format(cand, delimiter)
             if prediction is None:
+                candidate_timestamps.append(None)
                 continue
             cand_pred, cand_evi = prediction[0], prediction[-1]
-            if cand_pred:
-                preds.append(cand_pred[0])
             if evi is None and cand_evi:
                 evi = cand_evi[0]
+            interval = cand_pred[0] if cand_pred else (cand_evi[0] if cand_evi else None)
+            candidate_timestamps.append(interval)
+            if interval is not None:
+                preds.append(interval)
 
-        if not preds and evi is not None:
-            preds = [evi]
+        samples_timechat[f'{sample['idx']}'] = {
+            'vid': sample['video'].split('/')[-1],
+            'query': sample['q'].split("'")[1] +'. ',
+            'gt': sample['tgt'],
+            'response': sample['a'],
+            'candidates': candidates,
+            'candidate_timestamps': candidate_timestamps,
+            'timestamps': preds,
+            'timestamp': preds[0] if preds else None,
+        }
 
         if len(preds) == 0:
             cnt += 1
-            samples_timechat[sample['idx']] = []
             continue
 
         pred = preds[0]
         if evi is None:
             evi = pred
-        samples_timechat[f'{sample['idx']}'] = {}
-        samples_timechat[f'{sample['idx']}']['timestamp'] = pred
-        samples_timechat[f'{sample['idx']}']['timestamps'] = preds
-        samples_timechat[f'{sample['idx']}']['vid'] = sample['video'].split('/')[-1]
-        samples_timechat[f'{sample['idx']}']['query'] = sample['q'].split("'")[1] +'. '
-        gt = torch.Tensor([gt])
+        gt = torch.Tensor([sample['tgt']])
         pred_t = torch.Tensor(pred)
         evi_t = torch.Tensor(evi)
         iou = temporal_iou(gt, pred_t).max().item()

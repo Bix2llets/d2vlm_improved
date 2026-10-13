@@ -50,67 +50,108 @@ if __name__ == "__main__":
     '''
     answer = read_json(args.gt_file)
     answer = answer["annotations"]
-    gt_timestamps = {}
+    gt_meta = {}
     for jterm in answer:
-        gt_timestamps[jterm["id"]] = jterm["timestamp"]
-        
+        gt_meta[jterm["id"]] = {
+            'video_id': jterm.get("image_id"),
+            'interval': jterm["timestamp"],
+            'caption': jterm.get("caption"),
+        }
+
     submission = read_json(args.pred_file)
-    pred_timestamps = {}
-    pred_timestamps_k = {}
+
+    thresholds = [0.0, 0.3, 0.5, 0.7]
+    Result = {0: 0, 0.3: 0, 0.5: 0, 0.7: 0, 'miou': 0}
+    Result_k = {0: 0, 0.3: 0, 0.5: 0, 0.7: 0, 'miou': 0}
+    records = []
     num = 0
+    k_name = 1
+
     for qid, jterm in submission.items():
-        if 'timestamp' not in jterm:
-            pred_timestamps[int(qid)] = [0, 0]
-            pred_timestamps_k[int(qid)] = [[0, 0]]
+        idx = int(qid)
+        meta = gt_meta.get(idx)
+        if meta is None or not isinstance(jterm, dict):
             continue
-        # if submission[qid]['vid'] != answer[int(qid)]['image_id'] or submission[qid]['query'].strip() != answer[int(qid)]['caption'].strip():
-        #     print(f"{submission[qid]['vid']}\n{answer[int(qid)]['image_id']}\n{submission[qid]['query']}\n{answer[int(qid)]['caption']}")
+
+        gt_interval = meta['interval']
+        video_id = meta.get('video_id', jterm.get('vid'))
+
+        candidates = jterm.get('candidates') or [jterm.get('response', '')]
+        candidate_timestamps = jterm.get('candidate_timestamps')
+        if candidate_timestamps is None:
+            candidate_timestamps = jterm.get('timestamps') or [jterm.get('timestamp')]
+
+        k_name = max(k_name, len(candidates))
+
+        per_example_ious = []
+        for trial, (prompt_result, pred_interval) in enumerate(zip(candidates, candidate_timestamps)):
+            parse_success = pred_interval is not None
+            trial_iou = iou(gt_interval, pred_interval) if parse_success else 0.0
+            per_example_ious.append(trial_iou)
+            records.append({
+                'example_idx': idx,
+                'trial': trial,
+                'video_id': video_id,
+                'prompt_result': prompt_result,
+                'ground_truth': {
+                    'video_id': video_id,
+                    'interval': gt_interval,
+                    'caption': meta.get('caption'),
+                },
+                'iou': trial_iou,
+                'parse_success': parse_success,
+            })
+
+        top1_iou = per_example_ious[0] if per_example_ious else 0.0
+        best_iou = max(per_example_ious) if per_example_ious else 0.0
+        for c_iou in thresholds:
+            if top1_iou >= c_iou:
+                Result[c_iou] += 1
+            if best_iou >= c_iou:
+                Result_k[c_iou] += 1
+        Result['miou'] += top1_iou
+        Result_k['miou'] += best_iou
         num += 1
-        pred_timestamps[int(qid)] = jterm["timestamp"]
-        pred_timestamps_k[int(qid)] = jterm.get("timestamps", [jterm["timestamp"]])
 
-    k_name = max((len(v) for v in pred_timestamps_k.values()), default=1)
-
-    if args.sample:
-        new = {}
-        for qid in pred_timestamps.keys():
-            new[qid] = gt_timestamps[qid]
-        gt_timestamps = new
-    # num = len(gt_timestamps)
-    print(f"# pred video timestamps {len(pred_timestamps)}; # gt video timestamps {len(gt_timestamps)}")
-    # assert len(gt_timestamps) == len(pred_timestamps)
-    Result = {0: 0, 0.3:0, 0.5:0, 0.7:0, 'miou': 0}
-    Result_k = {0: 0, 0.3:0, 0.5:0, 0.7:0, 'miou': 0}
-    for key in gt_timestamps.keys():
-        if key not in pred_timestamps or len(pred_timestamps[key]) < 1:
-            continue
-        temp = iou(gt_timestamps[key], pred_timestamps[key])
-        for c_iou in [0.0, 0.3, 0.5, 0.7]:
-            if(temp >= c_iou):
-                Result[c_iou] = Result[c_iou] + 1
-        Result['miou'] += temp
-
-        candidates = pred_timestamps_k.get(key, [pred_timestamps[key]])
-        temp_k = max(iou(gt_timestamps[key], p) for p in candidates)
-        for c_iou in [0.0, 0.3, 0.5, 0.7]:
-            if(temp_k >= c_iou):
-                Result_k[c_iou] = Result_k[c_iou] + 1
-        Result_k['miou'] += temp_k
+    denom = num if num > 0 else 1
+    print(f"# pred examples {len(submission)}; # evaluated examples {num}")
     print(num, sum(Result.values()), Result)
-    print("IOU 0.3: {0}\nIOU 0.5: {1}\nIOU 0.7: {2}\n mIOU: {3}".format(Result[0.3]*100/num, Result[0.5]*100/num, Result[0.7]*100/num, Result['miou']/num))
-    print("Recall@{K} 0.3: {0}\nRecall@{K} 0.5: {1}\nRecall@{K} 0.7: {2}\n mIOU@{K}: {3}".format(Result_k[0.3]*100/num, Result_k[0.5]*100/num, Result_k[0.7]*100/num, Result_k['miou']/num, K=k_name))
+    print("IOU 0.3: {0}\nIOU 0.5: {1}\nIOU 0.7: {2}\n mIOU: {3}".format(Result[0.3]*100/denom, Result[0.5]*100/denom, Result[0.7]*100/denom, Result['miou']/denom))
+    print("Recall@{K} 0.3: {0}\nRecall@{K} 0.5: {1}\nRecall@{K} 0.7: {2}\n mIOU@{K}: {3}".format(Result_k[0.3]*100/denom, Result_k[0.5]*100/denom, Result_k[0.7]*100/denom, Result_k['miou']/denom, K=k_name))
+
     good_cases = []
-    good_cases.append(f'IOU 0.3: {Result[0.3]*100/num}')
-    good_cases.append(f'IOU 0.5: {Result[0.5]*100/num}')
-    good_cases.append(f'IOU 0.7: {Result[0.7]*100/num}')
-    good_cases.append(f'mIOU: {Result["miou"]/num}')
-    good_cases.append(f'Recall@{k_name} 0.3: {Result_k[0.3]*100/num}')
-    good_cases.append(f'Recall@{k_name} 0.5: {Result_k[0.5]*100/num}')
-    good_cases.append(f'Recall@{k_name} 0.7: {Result_k[0.7]*100/num}')
-    good_cases.append(f'mIOU@{k_name}: {Result_k["miou"]/num}')
+    good_cases.append(f'IOU 0.3: {Result[0.3]*100/denom}')
+    good_cases.append(f'IOU 0.5: {Result[0.5]*100/denom}')
+    good_cases.append(f'IOU 0.7: {Result[0.7]*100/denom}')
+    good_cases.append(f'mIOU: {Result["miou"]/denom}')
+    good_cases.append(f'Recall@{k_name} 0.3: {Result_k[0.3]*100/denom}')
+    good_cases.append(f'Recall@{k_name} 0.5: {Result_k[0.5]*100/denom}')
+    good_cases.append(f'Recall@{k_name} 0.7: {Result_k[0.7]*100/denom}')
+    good_cases.append(f'mIOU@{k_name}: {Result_k["miou"]/denom}')
+
     output_path = '/'.join(args.pred_file.split("/")[:-1])
-    output_file = "score_" + args.pred_file.split("/")[-1]
-    output_file = os.path.join(output_path, output_file)
-    # nncore.dump(good_cases, output_file)
+    output_file = os.path.join(output_path, "score_" + args.pred_file.split("/")[-1])
     with open(output_file, "w") as f:
-                f.write("\n".join(good_cases))
+        f.write("\n".join(good_cases))
+
+    summary = {
+        'num_examples': num,
+        'num_trials': k_name,
+        'top1': {
+            'iou@0.3': Result[0.3] * 100 / denom,
+            'iou@0.5': Result[0.5] * 100 / denom,
+            'iou@0.7': Result[0.7] * 100 / denom,
+            'mIoU': Result['miou'] / denom,
+        },
+        'best_of_k': {
+            'iou@0.3': Result_k[0.3] * 100 / denom,
+            'iou@0.5': Result_k[0.5] * 100 / denom,
+            'iou@0.7': Result_k[0.7] * 100 / denom,
+            'mIoU': Result_k['miou'] / denom,
+        },
+    }
+
+    per_sample_file = os.path.join(output_path, "per_sample_" + args.pred_file.split("/")[-1])
+    with open(per_sample_file, "w") as f:
+        json.dump({'summary': summary, 'records': records}, f, indent=2, ensure_ascii=False)
+    print(f"Wrote per-sample results to {per_sample_file}")
